@@ -1,0 +1,28 @@
+{
+    "name": "statamic-addon/component-exporter",
+    "description": "Export and import page sections, blueprints and collections as a ZIP",
+    "type": "statamic-addon",
+    "license": "proprietary",
+    "require": {
+        "php": "^8.2",
+        "statamic/cms": "^6.0"
+    },
+    "autoload": {
+        "psr-4": {
+            "Vizuall\\ComponentExporter\\": "src/"
+        }
+    },
+    "extra": {
+        "statamic": {
+            "name": "Component Exporter",
+            "provider": "Vizuall\\ComponentExporter\\AddonServiceProvider"
+        },
+        "laravel": {
+            "providers": [
+                "Vizuall\\ComponentExporter\\AddonServiceProvider"
+            ]
+        }
+    },
+    "minimum-stability": "dev",
+    "prefer-stable": true
+}
