@@ -1,11 +1,12 @@
 {
     "name": "statamic-addon/component-exporter",
-    "description": "Export and import page sections, blueprints and collections as a ZIP",
+    "description": "Export and import page sections — fieldsets, partials, baked Tailwind and previews travel together — as a ZIP, from the Control Panel",
     "type": "statamic-addon",
     "license": "proprietary",
     "require": {
         "php": "^8.2",
-        "statamic/cms": "^6.0"
+        "statamic/cms": "^6.0",
+        "statamic-addon/visual-editor": "^1.1"
     },
     "autoload": {
         "psr-4": {
@@ -24,5 +25,13 @@
         }
     },
     "minimum-stability": "dev",
-    "prefer-stable": true
+    "prefer-stable": true,
+    "require-dev": {
+        "orchestra/testbench": "^10.8"
+    },
+    "autoload-dev": {
+        "psr-4": {
+            "Vizuall\\ComponentExporter\\Tests\\": "tests/"
+        }
+    }
 }
