@@ -14,10 +14,11 @@ class PackageRoundTripTest extends TestCase
     {
         $this->heroSite();
 
-        $package = Package::build(['hero/style_2', 'nope'], ['content/collections/nope.yaml']);
+        $package = Package::build(['hero/style_2', 'nope'], ['collection:nope']);
         $this->created[] = $package['path'];
 
         $this->assertSame(1, $package['sections']);
+        $this->assertSame(0, $package['units']);
         $this->assertSame(9, $package['files']);
         $this->assertSame('hero-style-2-'.date('Y-m-d').'.zip', $package['filename']);
 
@@ -25,11 +26,11 @@ class PackageRoundTripTest extends TestCase
         $zip->open($package['path']);
         $manifest = json_decode($zip->getFromName('manifest.json'), true);
 
-        $this->assertSame(1, $manifest['format']);
+        $this->assertSame(2, $manifest['format']);
         $this->assertSame('hero/style_2', $manifest['sections'][0]['handle']);
         $this->assertSame('hero', $manifest['sections'][0]['group']);
         $this->assertSame(['fieldset: image'], $manifest['sections'][0]['missing']);
-        $this->assertSame([], $manifest['extras']);
+        $this->assertSame([], $manifest['units']);
         $this->assertSame(sha1('png'), collect($manifest['sections'][0]['files'])->firstWhere('role', 'preview')['sha1']);
         $this->assertNotFalse($zip->locateName('resources/fieldsets/blocks/headline.yaml'));
         $this->assertNotFalse($zip->locateName('resources/views/partials/page_sections/hero/style_2.antlers.html'));
@@ -122,7 +123,7 @@ class PackageRoundTripTest extends TestCase
 
         $this->assertTrue($review['legacy']);
         $this->assertSame([], $review['sections']);
-        $this->assertSame(['new', 'changed'], array_column($review['extras'], 'status'));
+        $this->assertSame(['new', 'changed'], array_column($review['units'][0]['files'], 'status'));
     }
 
     public function test_a_file_that_is_not_a_zip_is_refused(): void

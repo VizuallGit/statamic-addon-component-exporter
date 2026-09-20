@@ -4,22 +4,23 @@ namespace Vizuall\ComponentExporter\Http\Controllers;
 
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
-use Vizuall\ComponentExporter\Export\Extras;
 use Vizuall\ComponentExporter\Export\Package;
 use Vizuall\ComponentExporter\Import\Importer;
 use Vizuall\ComponentExporter\Import\Inspector;
 use Vizuall\ComponentExporter\Section\Manifest;
 use Vizuall\ComponentExporter\Section\Registry;
 use Vizuall\ComponentExporter\Selection;
+use Vizuall\ComponentExporter\Units\Catalog;
 
 /**
  * HTTP in, JSON or a download out. What a section consists of is Manifest's
- * business; what a package is, Package's; what happens on import, Inspector's
- * and Importer's. This class only translates.
+ * business, what a collection or form consists of is Catalog's; what a
+ * package is, Package's; what happens on import, Inspector's and Importer's.
+ * This class only translates.
  */
 class ComponentExporterController
 {
-    /** Everything the picker shows: section types by group, blueprints, collections, the remembered selection. */
+    /** Everything the picker shows: section types by group, the units by kind, the remembered selection. */
     public function items(): JsonResponse
     {
         $groups = [];
@@ -28,37 +29,33 @@ class ComponentExporterController
             $sections = [];
 
             foreach (array_keys($group['sets']) as $handle) {
-                if (! $manifest = Manifest::forSection((string) $handle)) {
-                    continue;
+                if ($manifest = Manifest::forSection((string) $handle)) {
+                    $sections[] = static::summary($manifest) + [
+                        'handle' => $manifest['handle'],
+                        'static' => $manifest['static'],
+                        'hidden' => ($manifest['set']['hide'] ?? false) === true,
+                    ];
                 }
-
-                $shared = [];
-
-                foreach ($manifest['files'] as $file) {
-                    if ($file['shared']) {
-                        $shared[] = ['label' => $file['label'], 'role' => $file['role'], 'path' => $file['path']];
-                    }
-                }
-
-                $sections[] = [
-                    'handle' => $manifest['handle'],
-                    'display' => $manifest['display'],
-                    'static' => $manifest['static'],
-                    'hidden' => ($manifest['set']['hide'] ?? false) === true,
-                    'files' => count($manifest['files']),
-                    'own' => count($manifest['files']) - count($shared),
-                    'shared' => $shared,
-                    'missing' => $manifest['missing'],
-                ];
             }
 
-            $groups[] = ['key' => $key, 'display' => $group['display'] ?? $key, 'sections' => $sections];
+            if ($sections) {
+                $groups[] = ['key' => $key, 'display' => $group['display'] ?? $key, 'sections' => $sections];
+            }
+        }
+
+        $units = [];
+
+        foreach (Catalog::all() as $kind => $list) {
+            $units[$kind] = array_map(fn ($unit) => static::summary($unit) + [
+                'id' => $unit['id'],
+                'kind' => $unit['kind'],
+                'handle' => $unit['handle'],
+            ], $list);
         }
 
         return response()->json([
             'groups' => $groups,
-            'blueprints' => Extras::blueprints(),
-            'collections' => Extras::collections(),
+            'units' => $units,
             'selection' => Selection::load(),
         ]);
     }
@@ -66,12 +63,12 @@ class ComponentExporterController
     public function export(Request $request)
     {
         $sections = array_values(array_filter((array) $request->input('sections', []), 'is_string'));
-        $extras = array_values(array_filter((array) $request->input('extras', []), 'is_string'));
+        $units = array_values(array_filter((array) $request->input('units', []), 'is_string'));
 
         try {
-            $package = Package::build($sections, $extras);
+            $package = Package::build($sections, $units);
         } catch (\InvalidArgumentException $e) {
-            return response()->json(['error' => 'Vælg mindst én sektion, blueprint eller collection.'], 422);
+            return response()->json(['error' => 'Vælg mindst én sektion, collection, formular, global eller blueprint.'], 422);
         }
 
         return response()->download($package['path'], $package['filename'])->deleteFileAfterSend(true);
@@ -127,5 +124,30 @@ class ComponentExporterController
         }
 
         return response()->json(Selection::toggle((string) $request->input('handle', '')));
+    }
+
+    /**
+     * What the picker needs to know about a section or unit: name, how many
+     * files, which are its own and which are shared, what is missing.
+     *
+     * @param  array{display: string, files: list<array>, missing: list<string>}  $thing
+     */
+    private static function summary(array $thing): array
+    {
+        $own = [];
+        $shared = [];
+
+        foreach ($thing['files'] as $file) {
+            $entry = ['label' => $file['label'], 'role' => $file['role'], 'path' => $file['path']];
+            $file['shared'] ? $shared[] = $entry : $own[] = $entry;
+        }
+
+        return [
+            'display' => $thing['display'],
+            'files' => count($thing['files']),
+            'own' => $own,
+            'shared' => $shared,
+            'missing' => $thing['missing'],
+        ];
     }
 }

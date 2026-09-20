@@ -146,4 +146,32 @@ abstract class TestCase extends AddonTestCase
         $this->file('public/assets/set-previews/hero-style-2-abc123.png', 'png');
         $this->file('public/assets/set-previews/.meta/hero-style-2-abc123.png.yaml', "width: 1440\n");
     }
+
+    /**
+     * Units: a `services` collection with config, blueprint (borrowing from
+     * `common`), index/show views (show pulls in a card component and has baked
+     * Tailwind) and a preset folder; a form; a global; a loose blueprint.
+     */
+    protected function unitsSite(): void
+    {
+        $this->file('resources/fieldsets/common.yaml', "title: Common\nfields:\n  -\n    handle: content_tab\n    field:\n      type: replicator\n      sets:\n        image:\n          fields:\n            - import: image\n");
+
+        $this->file('content/collections/services.yaml', "title: Services\ntemplate: services/show\nroute: '/services/{slug}'\n");
+        $this->file('resources/blueprints/collections/services/services.yaml', "title: Service\ntabs:\n  main:\n    sections:\n      -\n        fields:\n          -\n            handle: settings\n            field: common.content_tab\n");
+        $this->file('resources/views/services/index.antlers.html', "{{ collection:services }}{{ partial:components/card }}{{ /collection:services }}\n");
+        $this->file('resources/views/services/show.antlers.html', "<article>{{ title }}</article>\n{{ sve_tw handle=\"view/services/show\" }}\n");
+        $this->file('resources/views/partials/components/card.antlers.html', "<div class=\"card\">{{ title }}</div>\n{{ sve_tw handle=\"view/partials/components/card\" }}\n");
+        $this->file('resources/visual-editor/tw/view/services/show.css', ".prose{max-width:65ch}\n");
+        $this->file('resources/visual-editor/tw/view/partials/components/card.css', ".rounded{border-radius:.5rem}\n");
+        $this->file('resources/visual-editor/collection-presets/services/preset.yaml', "title: Services\n");
+        $this->file('resources/visual-editor/collection-presets/services/show.antlers.html', "<article></article>\n");
+
+        $this->file('resources/forms/contact_form.yaml', "title: Kontakt\n");
+        $this->file('resources/blueprints/forms/contact_form.yaml', "title: Kontakt\nfields:\n  -\n    handle: email\n    field:\n      type: text\n");
+
+        $this->file('content/globals/site_head.yaml', "title: Header\n");
+        $this->file('resources/blueprints/globals/site_head.yaml', "title: Header\nfields:\n  -\n    handle: logo\n    field:\n      type: assets\n");
+
+        $this->file('resources/blueprints/user.yaml', "title: User\nfields: []\n");
+    }
 }

@@ -2,7 +2,7 @@
 
 namespace Vizuall\ComponentExporter\Import;
 
-use Vizuall\ComponentExporter\Section\Manifest;
+use Vizuall\ComponentExporter\Export\Package;
 use Vizuall\ComponentExporter\Section\Paths;
 use Vizuall\ComponentExporter\Section\Registry;
 use ZipArchive;
@@ -14,8 +14,8 @@ use ZipArchive;
  * different? For every section: is it already registered, and is the entry the
  * same? The review the editor sees is this, and the default choice follows
  * from it — a new file comes in, an identical one has nothing to do, a changed
- * file comes in when it is the section's own and stays when it is shared with
- * sections the editor did not ask about.
+ * file comes in when it is the section's or unit's own and stays when it is
+ * shared with things the editor did not ask about.
  */
 final class Inspector
 {
@@ -28,7 +28,7 @@ final class Inspector
     /**
      * @return array{
      *   legacy: bool, format: ?int, exported_at: ?string, source: array,
-     *   sections: list<array>, extras: list<array>, files: int
+     *   sections: list<array>, units: list<array>, files: int
      * }
      *
      * @throws \InvalidArgumentException when the file is not a readable ZIP
@@ -50,25 +50,19 @@ final class Inspector
             }
         }
 
+        foreach (static::unitsOf($manifest) as $unit) {
+            foreach ((array) ($unit['files'] ?? []) as $file) {
+                $usedBy[$file['path']][] = (string) $unit['display'];
+            }
+        }
+
         $sections = [];
         $count = 0;
 
         foreach ($manifest['sections'] as $section) {
             $handle = (string) $section['handle'];
             $current = Registry::entry($handle);
-            $files = [];
-
-            foreach ((array) ($section['files'] ?? []) as $file) {
-                $files[] = static::describe(
-                    (string) $file['path'],
-                    $file['sha1'] ?? null,
-                    (string) ($file['role'] ?? 'file'),
-                    (bool) ($file['shared'] ?? false),
-                    (string) ($file['label'] ?? basename((string) $file['path'])),
-                    $usedBy[$file['path']] ?? []
-                );
-            }
-
+            $files = static::describeAll((array) ($section['files'] ?? []), $usedBy);
             $count += count($files);
 
             $sections[] = [
@@ -84,17 +78,20 @@ final class Inspector
             ];
         }
 
-        $extras = [];
+        $units = [];
 
-        foreach ((array) ($manifest['extras'] ?? []) as $extra) {
-            $extras[] = static::describe(
-                (string) $extra['path'],
-                $extra['sha1'] ?? null,
-                (string) ($extra['role'] ?? 'file'),
-                false,
-                basename((string) $extra['path']),
-                []
-            );
+        foreach (static::unitsOf($manifest) as $unit) {
+            $files = static::describeAll((array) ($unit['files'] ?? []), $usedBy);
+            $count += count($files);
+
+            $units[] = [
+                'id' => (string) $unit['id'],
+                'kind' => (string) $unit['kind'],
+                'handle' => (string) $unit['handle'],
+                'display' => (string) $unit['display'],
+                'missing' => array_values((array) ($unit['missing'] ?? [])),
+                'files' => $files,
+            ];
         }
 
         $zip->close();
@@ -105,16 +102,16 @@ final class Inspector
             'exported_at' => $manifest['exported_at'] ?? null,
             'source' => (array) ($manifest['source'] ?? []),
             'sections' => $sections,
-            'extras' => $extras,
-            'files' => $count + count($extras),
+            'units' => $units,
+            'files' => $count,
         ];
     }
 
     /**
      * The manifest inside a package, or null for an archive without one (made
-     * by the previous version of this tool, or by hand).
+     * by the first version of this tool, or by hand).
      *
-     * @return array{format: int, sections: list<array>, extras?: list<array>, exported_at?: string, source?: array}|null
+     * @return array{format: int, sections: list<array>, units?: list<array>, extras?: list<array>, exported_at?: string, source?: array}|null
      */
     public static function manifest(ZipArchive $zip): ?array
     {
@@ -130,7 +127,7 @@ final class Inspector
             return null;
         }
 
-        if ((int) $data['format'] > Manifest::FORMAT) {
+        if ((int) $data['format'] > Package::FORMAT) {
             throw new \InvalidArgumentException(sprintf(
                 'Pakken er lavet med en nyere udgave af Komponent Eksport (format %d). Opdatér addonet her først.',
                 (int) $data['format']
@@ -138,6 +135,34 @@ final class Inspector
         }
 
         return $data;
+    }
+
+    /**
+     * The units a manifest carries. A format-1 package listed loose blueprint
+     * and collection files as `extras`; they come back as one unit of files.
+     *
+     * @return list<array>
+     */
+    public static function unitsOf(array $manifest): array
+    {
+        if (isset($manifest['units']) && is_array($manifest['units'])) {
+            return array_values(array_filter($manifest['units'], 'is_array'));
+        }
+
+        $extras = array_values(array_filter((array) ($manifest['extras'] ?? []), 'is_array'));
+
+        if (! $extras) {
+            return [];
+        }
+
+        return [[
+            'id' => 'files:extras',
+            'kind' => 'files',
+            'handle' => 'extras',
+            'display' => 'Øvrige filer',
+            'files' => array_map(fn ($file) => $file + ['shared' => false, 'label' => basename((string) $file['path'])], $extras),
+            'missing' => [],
+        ]];
     }
 
     /** @throws \InvalidArgumentException */
@@ -155,7 +180,7 @@ final class Inspector
     /** An archive without a manifest: every file on its own, nothing to register. */
     private static function legacy(ZipArchive $zip): array
     {
-        $extras = [];
+        $files = [];
 
         for ($i = 0; $i < $zip->numFiles; $i++) {
             $name = (string) $zip->getNameIndex($i);
@@ -164,7 +189,7 @@ final class Inspector
                 continue;
             }
 
-            $extras[] = static::describe($name, null, 'file', false, basename($name), []);
+            $files[] = static::describe($name, null, 'file', false, basename($name), []);
         }
 
         $zip->close();
@@ -175,9 +200,43 @@ final class Inspector
             'exported_at' => null,
             'source' => [],
             'sections' => [],
-            'extras' => $extras,
-            'files' => count($extras),
+            'units' => $files ? [[
+                'id' => 'files:legacy',
+                'kind' => 'files',
+                'handle' => 'legacy',
+                'display' => 'Filer i arkivet',
+                'missing' => [],
+                'files' => $files,
+            ]] : [],
+            'files' => count($files),
         ];
+    }
+
+    /**
+     * @param  list<array>  $files  manifest file entries
+     * @param  array<string, list<string>>  $usedBy
+     * @return list<array>
+     */
+    private static function describeAll(array $files, array $usedBy): array
+    {
+        $out = [];
+
+        foreach ($files as $file) {
+            if (! is_array($file) || ! isset($file['path'])) {
+                continue;
+            }
+
+            $out[] = static::describe(
+                (string) $file['path'],
+                $file['sha1'] ?? null,
+                (string) ($file['role'] ?? 'file'),
+                (bool) ($file['shared'] ?? false),
+                (string) ($file['label'] ?? basename((string) $file['path'])),
+                $usedBy[$file['path']] ?? []
+            );
+        }
+
+        return $out;
     }
 
     /**
