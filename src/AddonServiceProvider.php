@@ -25,16 +25,26 @@ class AddonServiceProvider extends BaseAddonServiceProvider
         KitCommand::class,
     ];
 
+    /**
+     * Declared here, not published by hand in bootAddon(): Statamic only
+     * registers its publish-after-install step for an addon that names its
+     * assets in `$scripts`, `$stylesheets`, `$vite` or `$publishables`. A
+     * manual `publishes()` call is invisible to it, so `composer install` on
+     * the server (post-autoload-dump → statamic:install) never copied the
+     * script to public/vendor, and the utility came up empty there while it
+     * worked locally, where the file had been published by hand. Same fix as
+     * static-publish v1.0.9.
+     */
+    protected $publishables = [
+        __DIR__.'/../resources/js/addon.js' => 'js/addon.js',
+    ];
+
     public function bootAddon(): void
     {
         // Cache-bust on contents. The utility is one Vue component, and a browser
         // holding an old copy shows a screen that looks right and calls routes
         // that have changed.
         $script = __DIR__.'/../resources/js/addon.js';
-
-        $this->publishes([
-            $script => public_path('vendor/component-exporter/js/addon.js'),
-        ], 'component-exporter');
 
         Statamic::script('component-exporter', 'addon.js?v='.md5_file($script));
 
