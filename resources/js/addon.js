@@ -40,6 +40,14 @@
         changed: { text: 'Ændret', color: 'amber' },
     };
 
+    // A theme token the package asks for, against this site's own theme.
+    const TOKEN_STATUS = {
+        present: { text: 'Findes', color: 'default', rank: 3 },
+        differs: { text: 'Findes — anden værdi', color: 'default', rank: 2 },
+        step_missing: { text: 'Trin mangler', color: 'amber', rank: 1 },
+        missing: { text: 'Mangler', color: 'red', rank: 0 },
+    };
+
     // The unit kinds, in the order they are shown.
     const KINDS = [
         { key: 'collections', title: 'Collections', hint: 'Konfiguration, blueprint, index- og show-views, skabeloner og presets følger med.', one: 'collection', many: 'collections' },
@@ -171,6 +179,33 @@
             reviewRegisterCount() {
                 return Object.values(this.registerSections).filter(Boolean).length;
             },
+
+            // The theme tokens the package asks for, worst first. Tokens no
+            // theme owns (`--media-width` is written by the section itself at
+            // render time) are counted separately, not listed as trouble.
+            themeRows() {
+                return (this.review?.tokens || [])
+                    .filter(t => TOKEN_STATUS[t.status])
+                    .sort((a, b) => TOKEN_STATUS[a.status].rank - TOKEN_STATUS[b.status].rank || a.name.localeCompare(b.name));
+            },
+
+            themeShort() {
+                return this.themeRows.filter(t => t.status === 'missing' || t.status === 'step_missing');
+            },
+
+            themeState() {
+                if (!this.themeShort.length) return { text: 'Alt findes her', color: 'green' };
+                return { text: plural(this.themeShort.length, 'mangler', 'mangler'), color: 'amber' };
+            },
+
+            // Fluid sizes are worked out against the container width, so the
+            // two widths decide whether a size can be copied or has to be redone.
+            themeWidths() {
+                const there = this.review?.theme?.container_width;
+                const here = this.review?.theme?.container_width_here;
+                if (!there || !here || there === here) return null;
+                return 'Afsenderens container er ' + there + ', denne er ' + here + ' — en fluid størrelse skal regnes om, ikke kopieres.';
+            },
         },
 
         mounted() {
@@ -264,6 +299,19 @@
 
             statusBadge(status) {
                 return STATUS[status] || { text: status, color: 'default' };
+            },
+
+            tokenBadge(status) {
+                return TOKEN_STATUS[status] || { text: status, color: 'default' };
+            },
+
+            // What the row says under the token name.
+            tokenDetail(token) {
+                if (token.status === 'differs') return 'her: ' + token.here;
+                if (token.status === 'step_missing') return 'familien findes her: ' + token.here_base;
+                if (token.kind === 'size') return token.min + ' → ' + token.max + ' hos afsenderen';
+                if (token.kind === 'color') return token.value + (token.base && token.base !== token.value ? ' · familie ' + token.base : '');
+                return token.value || '';
             },
 
             // "1 blueprint · 2 views · 4 fælles filer" for a unit tile.
@@ -550,6 +598,28 @@
                     </div>
                     <ui-alert v-if="u.missing.length" variant="warning" style="margin-top:.75rem"
                         :text="'Refererer til noget der ikke fandtes på afsender-sitet: ' + u.missing.join(', ')" />
+                </div>
+
+                <div v-if="themeRows.length" class="ce-box" style="margin-top:1rem">
+                    <div class="ce-box-head">
+                        <div class="ce-title">
+                            <ui-heading text="Temaet" />
+                            <ui-badge text="farver og størrelser" size="sm" />
+                        </div>
+                        <ui-badge size="sm" :text="themeState.text" :color="themeState.color" />
+                    </div>
+                    <ui-text size="sm" variant="subtle"
+                        text="Sektionens filer følger med; temaet gør ikke. En farve eller størrelse dette site allerede har, vinder — sektionen tager farven her. Det der mangler, står nedenfor." />
+                    <ui-alert v-if="themeShort.length" variant="warning" style="margin-top:.75rem"
+                        :text="'Indtil det er lavet, tegner sektionen uden ' + themeShort.map(t => '--' + t.name).join(', ') + '.'" />
+                    <ui-alert v-if="themeWidths" variant="default" style="margin-top:.75rem" :text="themeWidths" />
+                    <div class="ce-rows" style="margin-top:.5rem">
+                        <div v-for="t in themeRows" :key="t.name" class="ce-row ce-row-3">
+                            <span class="ce-mono">--{{ t.name }}</span>
+                            <ui-text size="xs" variant="subtle" :text="tokenDetail(t)" />
+                            <ui-badge :text="tokenBadge(t.status).text" :color="tokenBadge(t.status).color" size="sm" />
+                        </div>
+                    </div>
                 </div>
 
                 <div class="ce-bar">

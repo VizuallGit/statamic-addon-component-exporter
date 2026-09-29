@@ -5,6 +5,7 @@ namespace Vizuall\ComponentExporter\Import;
 use Vizuall\ComponentExporter\Export\Package;
 use Vizuall\ComponentExporter\Section\Paths;
 use Vizuall\ComponentExporter\Section\Registry;
+use Vizuall\ComponentExporter\Theme\Tokens;
 use ZipArchive;
 
 /**
@@ -16,6 +17,11 @@ use ZipArchive;
  * from it — a new file comes in, an identical one has nothing to do, a changed
  * file comes in when it is the section's or unit's own and stays when it is
  * shared with things the editor did not ask about.
+ *
+ * The theme is read the same way: every token the package asks for, against
+ * what this site's `@theme` has. Nothing about a theme is decided here — a
+ * token this site already has wins, and only the missing ones are worth
+ * offering to make.
  */
 final class Inspector
 {
@@ -28,7 +34,8 @@ final class Inspector
     /**
      * @return array{
      *   legacy: bool, format: ?int, exported_at: ?string, source: array,
-     *   sections: list<array>, units: list<array>, files: int
+     *   sections: list<array>, units: list<array>, files: int,
+     *   tokens: list<array>, theme: array
      * }
      *
      * @throws \InvalidArgumentException when the file is not a readable ZIP
@@ -75,6 +82,7 @@ final class Inspector
                 'registered' => $current !== null,
                 'registry_same' => $current !== null && $current['set'] == ($section['set'] ?? null),
                 'files' => $files,
+                'tokens' => static::tokenNames($section),
             ];
         }
 
@@ -91,6 +99,7 @@ final class Inspector
                 'display' => (string) $unit['display'],
                 'missing' => array_values((array) ($unit['missing'] ?? [])),
                 'files' => $files,
+                'tokens' => static::tokenNames($unit),
             ];
         }
 
@@ -104,7 +113,67 @@ final class Inspector
             'sections' => $sections,
             'units' => $units,
             'files' => $count,
+            'tokens' => static::tokens($manifest),
+            'theme' => [
+                ...(array) ($manifest['theme'] ?? []),
+                'container_width_here' => Tokens::containerWidth(),
+            ],
         ];
+    }
+
+    /**
+     * Every theme token the package asks for, once, against this site.
+     *
+     * Sections and units share a theme, so the review shows one list: a token
+     * two sections both want is one decision, not two. `used_by` says which
+     * files wanted it and `wanted_by` which sections or units.
+     *
+     * @return list<array>
+     */
+    public static function tokens(array $manifest): array
+    {
+        $wanted = [];
+
+        foreach ([...$manifest['sections'], ...static::unitsOf($manifest)] as $owner) {
+            $label = (string) ($owner['handle'] ?? $owner['display'] ?? '');
+
+            foreach ((array) ($owner['tokens'] ?? []) as $token) {
+                if (! is_array($token) || ! isset($token['name'])) {
+                    continue;
+                }
+
+                $name = (string) $token['name'];
+
+                if (! isset($wanted[$name])) {
+                    $wanted[$name] = $token + ['wanted_by' => []];
+                }
+
+                $wanted[$name]['used_by'] = array_values(array_unique([
+                    ...(array) ($wanted[$name]['used_by'] ?? []),
+                    ...(array) ($token['used_by'] ?? []),
+                ]));
+
+                if ($label !== '' && ! in_array($label, $wanted[$name]['wanted_by'], true)) {
+                    $wanted[$name]['wanted_by'][] = $label;
+                }
+            }
+        }
+
+        return Tokens::compare(array_values($wanted));
+    }
+
+    /** The token names one section or unit asks for, for its own row. */
+    private static function tokenNames(array $owner): array
+    {
+        $names = [];
+
+        foreach ((array) ($owner['tokens'] ?? []) as $token) {
+            if (is_array($token) && isset($token['name'])) {
+                $names[] = (string) $token['name'];
+            }
+        }
+
+        return array_values(array_unique($names));
     }
 
     /**
@@ -207,8 +276,11 @@ final class Inspector
                 'display' => 'Filer i arkivet',
                 'missing' => [],
                 'files' => $files,
+                'tokens' => [],
             ]] : [],
             'files' => count($files),
+            'tokens' => [],
+            'theme' => [],
         ];
     }
 

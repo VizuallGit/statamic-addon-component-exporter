@@ -12,6 +12,7 @@ use Statamic\Facades\YAML;
 use Vizuall\ComponentExporter\Section\FieldsetChain;
 use Vizuall\ComponentExporter\Section\Manifest;
 use Vizuall\ComponentExporter\Section\Paths;
+use Vizuall\ComponentExporter\Theme\Tokens;
 
 /**
  * What travels besides section types, as units an editor recognises.
@@ -351,12 +352,15 @@ final class Catalog
 
     private static function unit(string $kind, string $handle, string $display, array $files, array $missing): array
     {
+        $files = array_values($files);
+
         return [
             'id' => $kind.':'.$handle,
             'kind' => $kind,
             'handle' => $handle,
             'display' => $display,
-            'files' => array_values($files),
+            'files' => $files,
+            'tokens' => Tokens::forFiles($files),
             'missing' => array_values(array_unique($missing)),
         ];
     }

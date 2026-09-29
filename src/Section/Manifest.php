@@ -4,6 +4,7 @@ namespace Vizuall\ComponentExporter\Section;
 
 use MarioHamann\StatamicVisualEditor\PreviewPartials;
 use MarioHamann\StatamicVisualEditor\TailwindStore;
+use Vizuall\ComponentExporter\Theme\Tokens;
 
 /**
  * THE contract: what belongs to a section type.
@@ -19,6 +20,10 @@ use MarioHamann\StatamicVisualEditor\TailwindStore;
  *             partials (`{{ sve_tw }}` / `{{ sve_tw handle="…" }}` in the text
  *             names the file in the store);
  *   preview   the picture the library shows for it, with its `.meta`.
+ *
+ * Plus the theme tokens those files ask for and do not bring: the colours and
+ * sizes a receiving site has to have for the section to look like itself
+ * (Theme\Tokens).
  *
  * Each file is `shared` or not. A section's own files are the ones named after
  * it: its fieldset folder, its template, its baked CSS, its preview. Everything
@@ -45,7 +50,7 @@ final class Manifest
      *   handle: string, display: string, group: string, group_display: ?string,
      *   static: bool, set: array,
      *   files: list<array{path: string, role: string, shared: bool, label: string}>,
-     *   missing: list<string>
+     *   tokens: list<array>, missing: list<string>
      * }|null null when the handle is not a registered section type
      */
     public static function forSection(string $handle): ?array
@@ -63,6 +68,8 @@ final class Manifest
         static::css($handle, $partials, $files);
         static::preview($set, $files);
 
+        $files = array_values($files);
+
         return [
             'handle' => $handle,
             'display' => (string) ($set['display'] ?? $handle),
@@ -70,7 +77,8 @@ final class Manifest
             'group_display' => $entry['group_display'],
             'static' => ($set['static'] ?? false) === true,
             'set' => $set,
-            'files' => array_values($files),
+            'files' => $files,
+            'tokens' => Tokens::forFiles($files),
             'missing' => $missing,
         ];
     }

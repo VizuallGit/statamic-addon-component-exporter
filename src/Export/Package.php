@@ -5,6 +5,7 @@ namespace Vizuall\ComponentExporter\Export;
 use Illuminate\Support\Str;
 use Vizuall\ComponentExporter\Section\Manifest;
 use Vizuall\ComponentExporter\Section\Paths;
+use Vizuall\ComponentExporter\Theme\Tokens;
 use Vizuall\ComponentExporter\Units\Catalog;
 use ZipArchive;
 
@@ -20,6 +21,12 @@ use ZipArchive;
  *
  * Format 2 added `units`; format 1 had a flat `extras` list instead, and the
  * Inspector still reads those.
+ *
+ * Within format 2, a section or unit also carries the theme tokens its files
+ * ask for, and the root carries this site's container width so another site
+ * can work out a fluid size against its own. Both are advice for the review —
+ * an older site ignores them and still imports the files — so they do not
+ * raise the format and lock those sites out.
  */
 final class Package
 {
@@ -62,6 +69,7 @@ final class Package
                 'static' => $manifest['static'],
                 'set' => $manifest['set'],
                 'files' => static::addFiles($zip, $manifest['files'], $added),
+                'tokens' => $manifest['tokens'] ?? [],
                 'missing' => $manifest['missing'],
             ];
         }
@@ -73,6 +81,7 @@ final class Package
                 'handle' => $unit['handle'],
                 'display' => $unit['display'],
                 'files' => static::addFiles($zip, $unit['files'], $added),
+                'tokens' => $unit['tokens'] ?? [],
                 'missing' => $unit['missing'],
             ];
         }
@@ -81,6 +90,7 @@ final class Package
             'format' => self::FORMAT,
             'exported_at' => now()->toIso8601String(),
             'source' => ['name' => (string) config('app.name'), 'url' => (string) config('app.url')],
+            'theme' => ['container_width' => Tokens::containerWidth()],
             'sections' => $sectionsOut,
             'units' => $unitsOut,
         ], JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE));
