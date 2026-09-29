@@ -103,13 +103,39 @@ class ComponentExporterController
 
         return response()->json($result + [
             'message' => sprintf(
-                '%d fil(er) skrevet, %d beholdt%s%s.',
+                '%d fil(er) skrevet, %d beholdt%s%s%s.',
                 count($result['written']),
                 count($result['skipped']),
                 $result['registered'] ? ', registreret: '.implode(', ', $result['registered']) : '',
+                static::tokenMessage($result['tokens'] ?? []),
                 $result['rejected'] ? ', afvist: '.implode(', ', $result['rejected']) : ''
             ),
         ]);
+    }
+
+    /** What the theme write did, for the line the editor reads afterwards. */
+    private static function tokenMessage(array $tokens): string
+    {
+        $written = (array) ($tokens['written'] ?? []);
+
+        if (! $written) {
+            return match ($tokens['reason'] ?? null) {
+                'theme-not-writable' => ', temaet kunne ikke skrives (site.css er skrivebeskyttet)',
+                'would-change-existing', 'unexpected-result' => ', temaet blev IKKE rørt (skrivningen så forkert ud og blev afbrudt)',
+                'no-theme-block' => ', temaet har ingen @theme-blok at skrive i',
+                'write-failed' => ', temaet kunne ikke gemmes',
+                default => '',
+            };
+        }
+
+        $line = ', lavet i temaet: '.implode(', ', array_map(fn ($n) => '--'.$n, $written));
+
+        return $line.match ($tokens['build'] ?? null) {
+            'ok' => ' (site.css bygget)',
+            null => '',
+            'no-vite', 'no-node' => ' (kør npm run build for at få dem med i de byggede filer)',
+            default => ' (byggede ikke: '.$tokens['build'].')',
+        };
     }
 
     public function selection(): JsonResponse

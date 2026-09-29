@@ -13,6 +13,8 @@ use Statamic\Facades\StaticCache;
 use Vizuall\ComponentExporter\Section\Paths;
 use Vizuall\ComponentExporter\Section\Previews;
 use Vizuall\ComponentExporter\Section\Registry;
+use Vizuall\ComponentExporter\Theme\Tokens;
+use Vizuall\ComponentExporter\Theme\Writer;
 
 /**
  * Writes what the editor chose from a package, and nothing else.
@@ -24,12 +26,15 @@ use Vizuall\ComponentExporter\Section\Registry;
  * registry, group and all. Afterwards the caches that would otherwise keep
  * showing the old site are dropped, and when the site commits its own edits to
  * git, this commit goes the same way.
+ *
+ * Chosen theme tokens are made in site.css — only the ones this site is
+ * missing, never one it already has, however different its value (Theme\Writer).
  */
 final class Importer
 {
     /**
-     * @param  array{files?: array<string, bool>, sections?: list<string>}  $choices
-     * @return array{written: list<string>, skipped: list<string>, registered: list<string>, rejected: list<string>}
+     * @param  array{files?: array<string, bool>, sections?: list<string>, tokens?: list<string>}  $choices
+     * @return array{written: list<string>, skipped: list<string>, registered: list<string>, rejected: list<string>, tokens: array}
      *
      * @throws \InvalidArgumentException when the file is not a readable ZIP
      */
@@ -111,11 +116,53 @@ final class Importer
             }
         }
 
-        if ($written || $registered) {
+        $tokens = static::makeTokens($manifest, (array) ($choices['tokens'] ?? []));
+
+        if ($written || $registered || $tokens['written']) {
             static::refresh($written, $registered);
         }
 
-        return compact('written', 'skipped', 'registered', 'rejected');
+        return compact('written', 'skipped', 'registered', 'rejected', 'tokens');
+    }
+
+    /**
+     * Makes the chosen theme tokens.
+     *
+     * The package's list is held against this site again here, not trusted
+     * from the review: only what is still missing can be made, so a colour
+     * that arrived in the meantime is never written over.
+     *
+     * @param  list<string>  $names
+     * @return array{written: list<string>, skipped: list<string>, reason: ?string, build: ?string}
+     */
+    private static function makeTokens(?array $manifest, array $names): array
+    {
+        $names = array_values(array_filter($names, 'is_string'));
+
+        if ($manifest === null || ! $names) {
+            return ['written' => [], 'skipped' => [], 'reason' => null, 'build' => null];
+        }
+
+        $makeable = array_values(array_filter(
+            Inspector::tokens($manifest),
+            fn ($token) => in_array($token['status'], [Tokens::MISSING, Tokens::STEP_MISSING], true)
+        ));
+
+        $result = Writer::add($makeable, $names);
+
+        // The site's own stylesheet is built again for the same reason the
+        // theme panel does it: `{{ theme_tokens }}` puts the new values on
+        // :root at once, but a utility class that reads them is only in
+        // public/build after a build. A server without node says so and the
+        // token is still made.
+        $build = null;
+
+        if ($result['written'] && class_exists(\MarioHamann\StatamicVisualEditor\SiteBuild::class)) {
+            $outcome = \MarioHamann\StatamicVisualEditor\SiteBuild::run();
+            $build = ($outcome['ok'] ?? false) ? 'ok' : (string) ($outcome['reason'] ?? 'failed');
+        }
+
+        return $result + ['build' => $build];
     }
 
     /**

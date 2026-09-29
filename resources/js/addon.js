@@ -126,6 +126,7 @@
                 importFile: null,
                 importStep: 'select', // select | review | done
                 review: null,
+                makeTokens: {},
                 writeFiles: {},
                 registerSections: {},
                 importing: false,
@@ -191,6 +192,10 @@
 
             themeShort() {
                 return this.themeRows.filter(t => t.status === 'missing' || t.status === 'step_missing');
+            },
+
+            makeTokenCount() {
+                return this.themeShort.filter(t => this.makeTokens[t.name]).length;
             },
 
             themeState() {
@@ -305,6 +310,12 @@
                 return TOKEN_STATUS[status] || { text: status, color: 'default' };
             },
 
+            // Only what this site is missing can be made. One it already has
+            // is left alone, whatever value the package carries.
+            canMake(token) {
+                return token.status === 'missing' || token.status === 'step_missing';
+            },
+
             // What the row says under the token name.
             tokenDetail(token) {
                 if (token.status === 'differs') return 'her: ' + token.here;
@@ -373,6 +384,7 @@
             reset() {
                 this.importStep = 'select';
                 this.review = null;
+                this.makeTokens = {};
                 this.writeFiles = {};
                 this.registerSections = {};
                 this.importMsg = '';
@@ -398,6 +410,11 @@
                         s.files.forEach(f => { writeFiles[f.path] = writeFiles[f.path] || f.suggested; });
                     });
                     (review.units || []).forEach(u => u.files.forEach(f => { writeFiles[f.path] = writeFiles[f.path] || f.suggested; }));
+                    const make = {};
+                    (review.tokens || []).forEach(t => {
+                        if (t.status === 'missing' || t.status === 'step_missing') make[t.name] = true;
+                    });
+                    this.makeTokens = make;
                     this.review = review;
                     this.writeFiles = writeFiles;
                     this.registerSections = registerSections;
@@ -417,6 +434,7 @@
                 form.append('choices', JSON.stringify({
                     files: this.writeFiles,
                     sections: Object.keys(this.registerSections).filter(h => this.registerSections[h]),
+                    tokens: Object.keys(this.makeTokens).filter(n => this.makeTokens[n]),
                 }));
                 try {
                     const result = await this.json('/import', { method: 'POST', body: form });
@@ -609,26 +627,31 @@
                         <ui-badge size="sm" :text="themeState.text" :color="themeState.color" />
                     </div>
                     <ui-text size="sm" variant="subtle"
-                        text="Sektionens filer følger med; temaet gør ikke. En farve eller størrelse dette site allerede har, vinder — sektionen tager farven her. Det der mangler, står nedenfor." />
-                    <ui-alert v-if="themeShort.length" variant="warning" style="margin-top:.75rem"
-                        :text="'Indtil det er lavet, tegner sektionen uden ' + themeShort.map(t => '--' + t.name).join(', ') + '.'" />
+                        text="Sektionens filer følger med; temaet gør ikke. En farve eller størrelse dette site allerede har, vinder — den bliver aldrig overskrevet. Det der mangler, kan laves nu; sæt flueben." />
                     <ui-alert v-if="themeWidths" variant="default" style="margin-top:.75rem" :text="themeWidths" />
                     <div class="ce-rows" style="margin-top:.5rem">
-                        <div v-for="t in themeRows" :key="t.name" class="ce-row ce-row-3">
-                            <span class="ce-mono">--{{ t.name }}</span>
-                            <ui-text size="xs" variant="subtle" :text="tokenDetail(t)" />
+                        <div v-for="t in themeRows" :key="t.name" class="ce-row">
+                            <ui-checkbox solo :model-value="!!makeTokens[t.name]" :disabled="!canMake(t)"
+                                :aria-label="'Opret --' + t.name"
+                                @update:model-value="makeTokens[t.name] = $event" />
+                            <div class="ce-cell">
+                                <span class="ce-mono">--{{ t.name }}</span>
+                                <ui-text size="xs" variant="subtle" :text="tokenDetail(t)" />
+                            </div>
                             <ui-badge :text="tokenBadge(t.status).text" :color="tokenBadge(t.status).color" size="sm" />
                         </div>
                     </div>
+                    <ui-text v-if="themeShort.length" size="xs" variant="subtle" style="margin-top:.5rem"
+                        :text="makeTokenCount ? makeTokenCount + ' laves i site.css ved import. Fravælger du en, tegner sektionen uden den.' : 'Ingen valgt — sektionen tegner uden dem, indtil du selv opretter dem i Tema-panelet.'" />
                 </div>
 
                 <div class="ce-bar">
-                    <ui-text size="sm" variant="subtle" :text="reviewWriteCount + ' fil(er) skrives' + (reviewRegisterCount ? ', ' + reviewRegisterCount + ' sektion(er) registreres' : '')" />
+                    <ui-text size="sm" variant="subtle" :text="reviewWriteCount + ' fil(er) skrives' + (reviewRegisterCount ? ', ' + reviewRegisterCount + ' sektion(er) registreres' : '') + (makeTokenCount ? ', ' + makeTokenCount + ' tema-token laves' : '')" />
                     <div class="ce-actions">
                         <ui-button variant="ghost" text="Tilbage" @click="reset" />
                         <ui-button variant="primary" icon="upload"
                             :text="importing ? 'Importerer…' : 'Importér'"
-                            :disabled="importing || (reviewWriteCount === 0 && reviewRegisterCount === 0)" @click="doImport" />
+                            :disabled="importing || (reviewWriteCount === 0 && reviewRegisterCount === 0 && makeTokenCount === 0)" @click="doImport" />
                     </div>
                 </div>
             </template>
