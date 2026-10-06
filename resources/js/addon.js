@@ -13,7 +13,9 @@
  *
  * Two panels, one thing at a time: export (sections by group, then collections,
  * forms, globals and loose blueprints as units; what travels along; download)
- * and import (upload, review file by file, apply).
+ * and import (upload, review file by file, apply). In the review a section
+ * can be given another name and handle; the review is then fetched again, so
+ * where each file lands and whether it is new there is the server's answer.
  */
 (function () {
     'use strict';
@@ -87,6 +89,7 @@
 .ce-list{margin:0;padding-inline-start:1rem}
 .ce-file{font-size:.875rem}
 .ce-empty{font-size:.8rem;opacity:.7;padding:.25rem 0}
+.ce-names{display:grid;grid-template-columns:repeat(auto-fit,minmax(14rem,1fr));gap:.75rem;margin:.25rem 0 .75rem}
 `;
 
     const base = () => window.location.pathname.replace(/\/$/, '');
@@ -105,6 +108,8 @@
             UiButton: ui.Button,
             UiCheckbox: ui.Checkbox,
             UiAlert: ui.Alert,
+            UiField: ui.Field,
+            UiInput: ui.Input,
         },
 
         props: {
@@ -129,6 +134,10 @@
                 makeTokens: {},
                 writeFiles: {},
                 registerSections: {},
+                renames: {}, // exported handle => { handle, display } as typed
+                renameTimer: null,
+                reinspecting: false,
+                inspectSeq: 0,
                 importing: false,
                 importMsg: '',
                 importOk: true,
@@ -179,6 +188,12 @@
             },
             reviewRegisterCount() {
                 return Object.values(this.registerSections).filter(Boolean).length;
+            },
+
+            // A handle still being typed, or one the server refused, stops the import.
+            renameHolds() {
+                return this.renameTimer !== null || this.reinspecting
+                    || (this.review?.sections || []).some(s => s.rename_error);
             },
 
             // The theme tokens the package asks for, worst first. Tokens no
@@ -382,12 +397,83 @@
             },
 
             reset() {
+                clearTimeout(this.renameTimer);
+                this.renameTimer = null;
+                this.inspectSeq++;
+                this.reinspecting = false;
                 this.importStep = 'select';
                 this.review = null;
                 this.makeTokens = {};
                 this.writeFiles = {};
                 this.registerSections = {};
+                this.renames = {};
                 this.importMsg = '';
+            },
+
+            // What the editor typed, only where it differs from the package.
+            renamePayload() {
+                const out = {};
+                (this.review?.sections || []).forEach(s => {
+                    const typed = this.renames[s.handle] || {};
+                    const handle = (typed.handle || '').trim();
+                    const display = (typed.display || '').trim();
+                    const entry = {};
+                    if (handle && handle !== s.handle) entry.handle = handle;
+                    if (display && display !== s.display) entry.display = display;
+                    if (Object.keys(entry).length) out[s.handle] = entry;
+                });
+                return out;
+            },
+
+            shownName(s) {
+                return (this.renames[s.handle]?.display || '').trim() || s.display;
+            },
+
+            setDisplay(s, value) {
+                this.renames[s.handle].display = value;
+                // A new name reaches the section list only by registering the section.
+                if (value.trim() && value.trim() !== s.display) this.registerSections[s.handle] = true;
+            },
+
+            setHandle(s, value) {
+                this.renames[s.handle].handle = value;
+                clearTimeout(this.renameTimer);
+                this.renameTimer = setTimeout(() => {
+                    this.renameTimer = null;
+                    this.reinspect();
+                }, 400);
+            },
+
+            // The review again under the typed handles. A section whose handle
+            // changed gets the default choices for the files that now land
+            // elsewhere; every other choice the editor made stays.
+            async reinspect() {
+                const seq = ++this.inspectSeq;
+                this.reinspecting = true;
+                const form = this.zipForm();
+                form.append('renames', JSON.stringify(this.renamePayload()));
+                try {
+                    const review = await this.json('/import/inspect', { method: 'POST', body: form });
+                    if (seq !== this.inspectSeq) return;
+                    const before = Object.fromEntries(this.review.sections.map(s => [s.handle, s]));
+                    review.sections.forEach(s => {
+                        const old = before[s.handle];
+                        if (!old || old.target_handle === s.target_handle) return;
+                        const landed = Object.fromEntries(old.files.map(f => [f.path, f.target]));
+                        s.files.forEach(f => {
+                            if (landed[f.path] !== f.target) this.writeFiles[f.path] = f.suggested;
+                        });
+                        this.registerSections[s.handle] = !s.registered || !s.registry_same;
+                    });
+                    this.review = review;
+                } catch (e) {
+                    if (seq === this.inspectSeq) {
+                        this.importMsg = e.message;
+                        this.importOk = false;
+                    }
+                } finally {
+                    if (seq === this.inspectSeq) this.reinspecting = false;
+                }
             },
 
             zipForm() {
@@ -405,7 +491,9 @@
                     const review = await this.json('/import/inspect', { method: 'POST', body: this.zipForm() });
                     const writeFiles = {};
                     const registerSections = {};
+                    const renames = {};
                     review.sections.forEach(s => {
+                        renames[s.handle] = { handle: s.handle, display: s.display };
                         registerSections[s.handle] = !s.registered || !s.registry_same;
                         s.files.forEach(f => { writeFiles[f.path] = writeFiles[f.path] || f.suggested; });
                     });
@@ -418,6 +506,7 @@
                     this.review = review;
                     this.writeFiles = writeFiles;
                     this.registerSections = registerSections;
+                    this.renames = renames;
                     this.importStep = 'review';
                 } catch (e) {
                     this.importMsg = e.message;
@@ -435,6 +524,7 @@
                     files: this.writeFiles,
                     sections: Object.keys(this.registerSections).filter(h => this.registerSections[h]),
                     tokens: Object.keys(this.makeTokens).filter(n => this.makeTokens[n]),
+                    renames: this.renamePayload(),
                 }));
                 try {
                     const result = await this.json('/import', { method: 'POST', body: form });
@@ -567,12 +657,23 @@
                 <div v-for="s in review.sections" :key="s.handle" class="ce-box" style="margin-top:1rem">
                     <div class="ce-box-head">
                         <div class="ce-title">
-                            <ui-heading :text="s.display" />
-                            <span class="ce-mono">{{ s.handle }}</span>
+                            <ui-heading :text="shownName(s)" />
+                            <span class="ce-mono">{{ s.target_handle }}</span>
                             <ui-badge text="Sektion" size="sm" />
                         </div>
                         <ui-badge size="sm" :text="sectionState(s).text" :color="sectionState(s).color" />
                     </div>
+                    <div class="ce-names">
+                        <ui-field label="Navn" instructions="Sådan står den i sektionslisten.">
+                            <ui-input size="sm" :model-value="renames[s.handle].display" :placeholder="s.display"
+                                @update:model-value="setDisplay(s, $event)" />
+                        </ui-field>
+                        <ui-field label="Handle" :instructions="'Mappe og filnavn. I pakken: \`' + s.handle + '\`'" :error="s.rename_error || undefined">
+                            <ui-input size="sm" :model-value="renames[s.handle].handle" :placeholder="s.handle" :loading="reinspecting"
+                                @update:model-value="setHandle(s, $event)" />
+                        </ui-field>
+                    </div>
+                    <ui-alert v-for="n in s.notes" :key="n" :text="n" style="margin-bottom:.75rem" />
                     <ui-checkbox :model-value="!!registerSections[s.handle]" @update:model-value="registerSections[s.handle] = $event"
                         label="Registrér i sektionslisten" :description="s.group_display ? 'Gruppe: ' + s.group_display : null" />
                     <div class="ce-rows" style="margin-top:.5rem">
@@ -580,7 +681,9 @@
                             <ui-checkbox solo :model-value="!!writeFiles[f.path]" :disabled="f.status === 'same'"
                                 @update:model-value="writeFiles[f.path] = $event" />
                             <div class="ce-cell">
-                                <span class="ce-mono">{{ f.path }}</span>
+                                <span class="ce-mono">{{ f.target }}</span>
+                                <ui-text v-if="f.target !== f.path" size="xs" variant="subtle"
+                                    :text="'omdøbt fra ' + f.path.split('/').pop()" />
                                 <ui-text v-if="f.shared && f.used_by.length > 1" size="xs" variant="subtle"
                                     :text="'også i ' + f.used_by.filter(h => h !== s.handle).join(', ')" />
                             </div>
@@ -651,7 +754,7 @@
                         <ui-button variant="ghost" text="Tilbage" @click="reset" />
                         <ui-button variant="primary" icon="upload"
                             :text="importing ? 'Importerer…' : 'Importér'"
-                            :disabled="importing || (reviewWriteCount === 0 && reviewRegisterCount === 0 && makeTokenCount === 0)" @click="doImport" />
+                            :disabled="importing || renameHolds || (reviewWriteCount === 0 && reviewRegisterCount === 0 && makeTokenCount === 0)" @click="doImport" />
                     </div>
                 </div>
             </template>

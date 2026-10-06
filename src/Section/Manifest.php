@@ -159,17 +159,22 @@ final class Manifest
         }
     }
 
+    /** Where section templates live, site-relative: `{base}/{handle}.antlers.html`. Same setting the Visual Editor reads. */
+    public static function sectionPartials(): string
+    {
+        return trim((string) config(
+            'statamic-visual-editor.previews.section_partials',
+            'resources/views/partials/page_sections'
+        ), '/');
+    }
+
     /**
      * @param  array<string, array>  $files
      * @return list<string> absolute paths of the partials, for the CSS pass
      */
     private static function partials(string $handle, array &$files): array
     {
-        $base = trim((string) config(
-            'statamic-visual-editor.previews.section_partials',
-            'resources/views/partials/page_sections'
-        ), '/');
-
+        $base = static::sectionPartials();
         $partials = PreviewPartials::forSection($handle);
 
         foreach ($partials as $absolute) {

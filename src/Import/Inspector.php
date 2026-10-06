@@ -18,6 +18,10 @@ use ZipArchive;
  * file comes in when it is the section's or unit's own and stays when it is
  * shared with things the editor did not ask about.
  *
+ * A section can come in under another name (Rename): the review is then of
+ * the files where they will land and of the registry entry under the new
+ * handle, so "new", "same" and "changed" describe what the import will do.
+ *
  * The theme is read the same way: every token the package asks for, against
  * what this site's `@theme` has. Nothing about a theme is decided here — a
  * token this site already has wins, and only the missing ones are worth
@@ -38,9 +42,11 @@ final class Inspector
      *   tokens: list<array>, theme: array
      * }
      *
+     * @param  array<string, mixed>  $renames  exported handle => {handle?, display?}
+     *
      * @throws \InvalidArgumentException when the file is not a readable ZIP
      */
-    public static function inspect(string $zipPath): array
+    public static function inspect(string $zipPath, array $renames = []): array
     {
         $zip = static::open($zipPath);
         $manifest = static::manifest($zip);
@@ -49,38 +55,32 @@ final class Inspector
             return static::legacy($zip);
         }
 
-        $usedBy = [];
-
-        foreach ($manifest['sections'] as $section) {
-            foreach ((array) ($section['files'] ?? []) as $file) {
-                $usedBy[$file['path']][] = (string) $section['handle'];
-            }
-        }
-
-        foreach (static::unitsOf($manifest) as $unit) {
-            foreach ((array) ($unit['files'] ?? []) as $file) {
-                $usedBy[$file['path']][] = (string) $unit['display'];
-            }
-        }
-
+        $usedBy = static::usedBy($manifest);
+        $plans = Rename::plans($manifest['sections'], $renames, $usedBy, static::reader($zip));
+        $targets = Rename::targets($plans);
         $sections = [];
         $count = 0;
 
         foreach ($manifest['sections'] as $section) {
             $handle = (string) $section['handle'];
-            $current = Registry::entry($handle);
-            $files = static::describeAll((array) ($section['files'] ?? []), $usedBy);
+            $plan = $plans[$handle];
+            $current = Registry::entry($plan['handle']);
+            $files = static::describeAll((array) ($section['files'] ?? []), $usedBy, $targets);
             $count += count($files);
 
             $sections[] = [
                 'handle' => $handle,
                 'display' => (string) ($section['display'] ?? $handle),
+                'target_handle' => $plan['handle'],
+                'target_display' => $plan['display'],
+                'rename_error' => $plan['error'],
+                'notes' => $plan['notes'],
                 'group' => (string) ($section['group'] ?? ''),
                 'group_display' => $section['group_display'] ?? null,
                 'static' => (bool) ($section['static'] ?? false),
                 'missing' => array_values((array) ($section['missing'] ?? [])),
                 'registered' => $current !== null,
-                'registry_same' => $current !== null && $current['set'] == ($section['set'] ?? null),
+                'registry_same' => $current !== null && $current['set'] == $plan['set'],
                 'files' => $files,
                 'tokens' => static::tokenNames($section),
             ];
@@ -119,6 +119,41 @@ final class Inspector
                 'container_width_here' => Tokens::containerWidth(),
             ],
         ];
+    }
+
+    /**
+     * Every package path with what in the package uses it: section handles,
+     * unit names. A file more than one thing uses is not one section's to move.
+     *
+     * @return array<string, list<string>>
+     */
+    public static function usedBy(array $manifest): array
+    {
+        $usedBy = [];
+
+        foreach ($manifest['sections'] as $section) {
+            foreach ((array) ($section['files'] ?? []) as $file) {
+                $usedBy[$file['path']][] = (string) $section['handle'];
+            }
+        }
+
+        foreach (static::unitsOf($manifest) as $unit) {
+            foreach ((array) ($unit['files'] ?? []) as $file) {
+                $usedBy[$file['path']][] = (string) $unit['display'];
+            }
+        }
+
+        return $usedBy;
+    }
+
+    /** @return callable(string): ?string a package file's contents, null when it is not there */
+    public static function reader(ZipArchive $zip): callable
+    {
+        return function (string $path) use ($zip): ?string {
+            $contents = $zip->getFromName($path);
+
+            return $contents === false ? null : $contents;
+        };
     }
 
     /**
@@ -258,7 +293,7 @@ final class Inspector
                 continue;
             }
 
-            $files[] = static::describe($name, null, 'file', false, basename($name), []);
+            $files[] = static::describe($name, $name, null, 'file', false, basename($name), []);
         }
 
         $zip->close();
@@ -287,9 +322,10 @@ final class Inspector
     /**
      * @param  list<array>  $files  manifest file entries
      * @param  array<string, list<string>>  $usedBy
+     * @param  array<string, string>  $targets  package path => where a renamed section writes it
      * @return list<array>
      */
-    private static function describeAll(array $files, array $usedBy): array
+    private static function describeAll(array $files, array $usedBy, array $targets = []): array
     {
         $out = [];
 
@@ -300,6 +336,7 @@ final class Inspector
 
             $out[] = static::describe(
                 (string) $file['path'],
+                $targets[$file['path']] ?? (string) $file['path'],
                 $file['sha1'] ?? null,
                 (string) ($file['role'] ?? 'file'),
                 (bool) ($file['shared'] ?? false),
@@ -312,12 +349,13 @@ final class Inspector
     }
 
     /**
+     * @param  string  $target  where the file is written here: its own path, or a renamed section's
      * @param  list<string>  $usedBy
-     * @return array{path: string, role: string, shared: bool, label: string, used_by: list<string>, status: string, suggested: bool}
+     * @return array{path: string, target: string, role: string, shared: bool, label: string, used_by: list<string>, status: string, suggested: bool}
      */
-    private static function describe(string $path, ?string $sha1, string $role, bool $shared, string $label, array $usedBy): array
+    private static function describe(string $path, string $target, ?string $sha1, string $role, bool $shared, string $label, array $usedBy): array
     {
-        $absolute = Paths::absolute($path);
+        $absolute = Paths::absolute($target);
 
         if (! is_file($absolute)) {
             $status = self::STATUS_NEW;
@@ -329,6 +367,7 @@ final class Inspector
 
         return [
             'path' => $path,
+            'target' => $target,
             'role' => $role,
             'shared' => $shared,
             'label' => $label,

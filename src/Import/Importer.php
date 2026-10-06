@@ -27,22 +27,42 @@ use Vizuall\ComponentExporter\Theme\Writer;
  * showing the old site are dropped, and when the site commits its own edits to
  * git, this commit goes the same way.
  *
+ * A section the editor renamed in the review is written under its new name:
+ * its own files land where Rename moves them and it is registered under the
+ * new handle. A rename that cannot be done stops the import before anything
+ * is written — the files would otherwise land under the old name unasked.
+ *
  * Chosen theme tokens are made in site.css — only the ones this site is
  * missing, never one it already has, however different its value (Theme\Writer).
  */
 final class Importer
 {
     /**
-     * @param  array{files?: array<string, bool>, sections?: list<string>, tokens?: list<string>}  $choices
+     * @param  array{files?: array<string, bool>, sections?: list<string>, tokens?: list<string>, renames?: array<string, array{handle?: string, display?: string}>}  $choices
+     *   files and sections by the paths and handles in the package, whatever they are renamed to
      * @return array{written: list<string>, skipped: list<string>, registered: list<string>, rejected: list<string>, tokens: array}
      *
-     * @throws \InvalidArgumentException when the file is not a readable ZIP
+     * @throws \InvalidArgumentException when the file is not a readable ZIP, or a rename cannot be done
      */
     public static function apply(string $zipPath, array $choices): array
     {
         $zip = Inspector::open($zipPath);
         $manifest = Inspector::manifest($zip);
+        $plans = [];
 
+        if ($manifest !== null) {
+            $plans = Rename::plans($manifest['sections'], (array) ($choices['renames'] ?? []), Inspector::usedBy($manifest), Inspector::reader($zip));
+
+            foreach ($plans as $handle => $plan) {
+                if ($plan['error'] !== null) {
+                    $zip->close();
+
+                    throw new \InvalidArgumentException($handle.': '.$plan['error']);
+                }
+            }
+        }
+
+        $targets = Rename::targets($plans);
         $written = [];
         $skipped = [];
         $rejected = [];
@@ -57,7 +77,9 @@ final class Importer
                 continue;
             }
 
-            if (! static::isWritable($path)) {
+            $target = $targets[$path] ?? $path;
+
+            if (! static::isWritable($target)) {
                 $rejected[] = $path;
 
                 continue;
@@ -71,7 +93,7 @@ final class Importer
                 continue;
             }
 
-            $absolute = Paths::absolute($path);
+            $absolute = Paths::absolute($target);
             $directory = dirname($absolute);
 
             if (! is_dir($directory) && ! @mkdir($directory, 0775, true) && ! is_dir($directory)) {
@@ -86,7 +108,7 @@ final class Importer
                 continue;
             }
 
-            $written[] = $path;
+            $written[] = $target;
         }
 
         $zip->close();
@@ -104,15 +126,16 @@ final class Importer
                 }
 
                 $section = $byHandle[$handle];
+                $plan = $plans[$handle];
 
                 Registry::merge(
                     (string) ($section['group'] ?: 'sections'),
                     $section['group_display'] ?? null,
-                    (string) $handle,
-                    $section['set']
+                    $plan['handle'],
+                    $plan['set']
                 );
 
-                $registered[] = (string) $handle;
+                $registered[] = $plan['handle'];
             }
         }
 

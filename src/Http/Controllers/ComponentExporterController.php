@@ -78,8 +78,10 @@ class ComponentExporterController
     {
         $request->validate(['zip' => 'required|file']);
 
+        $renames = json_decode((string) $request->input('renames', '{}'), true);
+
         try {
-            return response()->json(Inspector::inspect($request->file('zip')->getPathname()));
+            return response()->json(Inspector::inspect($request->file('zip')->getPathname(), is_array($renames) ? $renames : []));
         } catch (\InvalidArgumentException $e) {
             return response()->json(['error' => $e->getMessage()], 422);
         }
